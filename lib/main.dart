@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'account_storage.dart';
 import 'app_theme.dart';
 import 'demo_data.dart';
 import 'models.dart';
@@ -16,8 +17,34 @@ import 'screens/weather_forecast_screen.dart';
 
 void main() => runApp(const MyMapApp());
 
-class MyMapApp extends StatelessWidget {
-  const MyMapApp({super.key});
+class MyMapApp extends StatefulWidget {
+  const MyMapApp({super.key, this.accountStorage});
+
+  final AccountStorage? accountStorage;
+
+  @override
+  State<MyMapApp> createState() => _MyMapAppState();
+}
+
+class _MyMapAppState extends State<MyMapApp> {
+  late AccountStorage _accountStorage;
+  late Future<AccountSession?> _accountFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _accountStorage = widget.accountStorage ?? SecureAccountStorage();
+    _accountFuture = _accountStorage.loadAccount();
+  }
+
+  @override
+  void didUpdateWidget(covariant MyMapApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.accountStorage != widget.accountStorage) {
+      _accountStorage = widget.accountStorage ?? SecureAccountStorage();
+      _accountFuture = _accountStorage.loadAccount();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,7 +75,48 @@ class MyMapApp extends StatelessWidget {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
-      home: const NavigationFlow(),
+      home: FutureBuilder<AccountSession?>(
+        future: _accountFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Scaffold(
+              body: SafeArea(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'We could not load your saved account from this device.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 18, color: AppColors.ink),
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: () => setState(
+                            () => _accountFuture = _accountStorage.loadAccount(),
+                          ),
+                          child: const Text('Try again'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+          if (!snapshot.hasData && snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator(value: 0.25)),
+            );
+          }
+          return NavigationFlow(
+            accountStorage: _accountStorage,
+            savedAccount: snapshot.data,
+          );
+        },
+      ),
     );
   }
 }
@@ -67,7 +135,14 @@ enum _Stage {
 }
 
 class NavigationFlow extends StatefulWidget {
-  const NavigationFlow({super.key});
+  const NavigationFlow({
+    required this.accountStorage,
+    required this.savedAccount,
+    super.key,
+  });
+
+  final AccountStorage accountStorage;
+  final AccountSession? savedAccount;
 
   @override
   State<NavigationFlow> createState() => _NavigationFlowState();
@@ -75,50 +150,88 @@ class NavigationFlow extends StatefulWidget {
 
 class _NavigationFlowState extends State<NavigationFlow> {
   _Stage _stage = _Stage.home;
-  bool _isAuthenticated = false;
-  bool _isSignUp = true;
+  late bool _isAuthenticated = widget.savedAccount?.isSignedIn ?? false;
+  late bool _isSignUp = widget.savedAccount == null;
   String _authError = '';
-  String _userName = '';
-  String _userEmail = '';
-  String _userPhone = '';
-  String _userPassword = '';
+  late String _userName = widget.savedAccount?.name ?? '';
+  late String _userEmail = widget.savedAccount?.email ?? '';
+  late String _userPhone = widget.savedAccount?.phone ?? '';
+  late String _userPassword = widget.savedAccount?.password ?? '';
+  bool _isSubmitting = false;
   ChatContact _selectedContact = chatContacts.first;
   Place _destination = favoritePlaces[1];
   RouteChoice _route = routeChoices.first;
   int _step = 0;
 
-  void _authenticate(AuthDetails details) {
+  Future<void> _authenticate(AuthDetails details) async {
     final email = details.email.trim().toLowerCase();
-    if (details.isSignUp) {
-      setState(() {
-        _userName = details.name.trim();
-        _userEmail = email;
-        _userPhone = details.phone.trim();
-        _userPassword = details.password;
-        _isAuthenticated = true;
-        _authError = '';
-      });
-      return;
-    }
-
-    if (email != _userEmail || details.password != _userPassword) {
-      setState(() => _authError = 'That email or password does not match this demo account.');
-      return;
-    }
-
     setState(() {
-      _isAuthenticated = true;
+      _isSubmitting = true;
       _authError = '';
     });
+
+    try {
+      if (details.isSignUp) {
+        await widget.accountStorage.saveAccount(details);
+        if (!mounted) return;
+        setState(() {
+          _userName = details.name.trim();
+          _userEmail = email;
+          _userPhone = details.phone.trim();
+          _userPassword = details.password;
+          _isAuthenticated = true;
+        });
+        return;
+      }
+
+      if (email != _userEmail || details.password != _userPassword) {
+        setState(() => _authError = 'That email or password does not match this demo account.');
+        return;
+      }
+
+      await widget.accountStorage.setSignedIn(true);
+      if (!mounted) return;
+      setState(() => _isAuthenticated = true);
+    } on Exception catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'account storage',
+          context: ErrorDescription('while saving or opening the demo account'),
+        ),
+      );
+      if (mounted) {
+        setState(
+          () => _authError = 'We could not save your account securely on this device. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
-  void _signOut() {
-    setState(() {
-      _isAuthenticated = false;
-      _isSignUp = false;
-      _authError = '';
-      _stage = _Stage.home;
-    });
+  Future<void> _signOut() async {
+    try {
+      await widget.accountStorage.setSignedIn(false);
+      if (!mounted) return;
+      setState(() {
+        _isAuthenticated = false;
+        _isSignUp = false;
+        _authError = '';
+        _stage = _Stage.home;
+      });
+    } on Exception catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'account storage',
+          context: ErrorDescription('while signing out of the demo account'),
+        ),
+      );
+      if (mounted) _message('We could not sign you out. Please try again.');
+    }
   }
 
   void _message(String text) {
@@ -145,6 +258,8 @@ class _NavigationFlowState extends State<NavigationFlow> {
     if (!_isAuthenticated) {
       return AuthScreen(
         initialIsSignUp: _isSignUp,
+        initialEmail: _userEmail,
+        isSubmitting: _isSubmitting,
         errorMessage: _authError,
         onModeChanged: (isSignUp) => setState(() {
           _isSignUp = isSignUp;

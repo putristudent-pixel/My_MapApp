@@ -6,6 +6,8 @@ import '../widgets/shared_widgets.dart';
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
     required this.initialIsSignUp,
+    required this.initialEmail,
+    required this.isSubmitting,
     required this.errorMessage,
     required this.onModeChanged,
     required this.onSubmit,
@@ -13,9 +15,11 @@ class AuthScreen extends StatefulWidget {
   });
 
   final bool initialIsSignUp;
+  final String initialEmail;
+  final bool isSubmitting;
   final String errorMessage;
   final ValueChanged<bool> onModeChanged;
-  final ValueChanged<AuthDetails> onSubmit;
+  final Future<void> Function(AuthDetails) onSubmit;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -24,7 +28,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
+  late final _emailController = TextEditingController(text: widget.initialEmail);
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
@@ -53,15 +57,17 @@ class _AuthScreenState extends State<AuthScreen> {
     return null;
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    widget.onSubmit(AuthDetails(
-      isSignUp: _isSignUp,
-      name: _nameController.text,
-      email: _emailController.text,
-      phone: _phoneController.text,
-      password: _passwordController.text,
-    ));
+    await widget.onSubmit(
+      AuthDetails(
+        isSignUp: _isSignUp,
+        name: _nameController.text,
+        email: _emailController.text,
+        phone: _phoneController.text,
+        password: _passwordController.text,
+      ),
+    );
   }
 
   @override
@@ -182,13 +188,21 @@ class _AuthScreenState extends State<AuthScreen> {
                         ],
                         const SizedBox(height: 22),
                         FilledButton(
-                          onPressed: _submit,
+                          onPressed: widget.isSubmitting ? null : _submit,
                           style: primaryButtonStyle(),
-                          child: Text(_isSignUp ? 'Create account' : 'Sign in'),
+                          child: widget.isSubmitting
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Text(_isSignUp ? 'Create account' : 'Sign in'),
                         ),
                         const SizedBox(height: 8),
                         TextButton(
-                          onPressed: () {
+                          onPressed: widget.isSubmitting
+                              ? null
+                              : () {
                             setState(() => _isSignUp = !_isSignUp);
                             widget.onModeChanged(_isSignUp);
                           },
@@ -199,7 +213,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Demo only: account details are kept in memory and are not sent to a service.',
+                    'Demo only: your account is saved securely on this device and is not sent to a service.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: AppColors.muted, fontSize: 13),
                   ),

@@ -1,6 +1,42 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:my_map_app/account_storage.dart';
 import 'package:my_map_app/main.dart';
+import 'package:my_map_app/models.dart';
+
+class _MemoryAccountStorage implements AccountStorage {
+  AccountSession? account;
+
+  @override
+  Future<AccountSession?> loadAccount() async => account;
+
+  @override
+  Future<void> saveAccount(AuthDetails details) async {
+    account = AccountSession(
+      name: details.name.trim(),
+      email: details.email.trim().toLowerCase(),
+      phone: details.phone.trim(),
+      password: details.password,
+      isSignedIn: true,
+    );
+  }
+
+  @override
+  Future<void> setSignedIn(bool isSignedIn) async {
+    final savedAccount = account;
+    if (savedAccount == null) {
+      throw StateError('Cannot update sign-in state without a saved account.');
+    }
+    account = savedAccount.copyWith(isSignedIn: isSignedIn);
+  }
+}
+
+void _useTallTestViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 1200);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
 
 Future<void> _createAccount(WidgetTester tester) async {
   await tester.ensureVisible(find.byKey(const ValueKey('auth-name')));
@@ -19,15 +55,22 @@ Future<void> _createAccount(WidgetTester tester) async {
       .ensureVisible(find.byKey(const ValueKey('auth-confirm-password')));
   await tester.enterText(
       find.byKey(const ValueKey('auth-confirm-password')), 'example123');
-  await tester.ensureVisible(find.text('Create account'));
-  await tester.tap(find.text('Create account'));
+  final createAccountButton = find.ancestor(
+    of: find.text('Create account'),
+    matching: find.byType(FilledButton),
+  );
+  await tester.ensureVisible(createAccountButton);
+  await tester.tap(createAccountButton);
   await tester.pumpAndSettle();
 }
 
 void main() {
   testWidgets('sign up greets the user and opens their profile',
       (tester) async {
-    await tester.pumpWidget(const MyMapApp());
+    _useTallTestViewport(tester);
+    final storage = _MemoryAccountStorage();
+    await tester.pumpWidget(MyMapApp(accountStorage: storage));
+    await tester.pumpAndSettle();
 
     expect(find.text('Create your account'), findsOneWidget);
     await _createAccount(tester);
@@ -56,7 +99,9 @@ void main() {
   });
 
   testWidgets('home screen opens the destination picker', (tester) async {
-    await tester.pumpWidget(const MyMapApp());
+    _useTallTestViewport(tester);
+    await tester.pumpWidget(MyMapApp(accountStorage: _MemoryAccountStorage()));
+    await tester.pumpAndSettle();
     await _createAccount(tester);
 
     expect(find.text('Hello, Ada Lovelace!'), findsOneWidget);
@@ -94,7 +139,9 @@ void main() {
   });
 
   testWidgets('user can choose a place and start a walk', (tester) async {
-    await tester.pumpWidget(const MyMapApp());
+    _useTallTestViewport(tester);
+    await tester.pumpWidget(MyMapApp(accountStorage: _MemoryAccountStorage()));
+    await tester.pumpAndSettle();
     await _createAccount(tester);
     await tester.tap(find.text('Pick a destination'));
     await tester.pumpAndSettle();
@@ -117,6 +164,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Calling Jay… (demo only)'), findsOneWidget);
 
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Next step'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Next step'));
@@ -138,5 +187,45 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Sarah has been told you arrived safely. (Demo)'),
         findsOneWidget);
+  });
+
+  testWidgets('account and sign-in state persist across app restarts',
+      (tester) async {
+    _useTallTestViewport(tester);
+    final storage = _MemoryAccountStorage();
+    await tester.pumpWidget(MyMapApp(
+      key: const ValueKey('first-launch'),
+      accountStorage: storage,
+    ));
+    await tester.pumpAndSettle();
+    await _createAccount(tester);
+
+    expect(find.text('Hello, Ada Lovelace!'), findsOneWidget);
+    await tester.pumpWidget(MyMapApp(
+      key: const ValueKey('second-launch'),
+      accountStorage: storage,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Hello, Ada Lovelace!'), findsOneWidget);
+
+    await tester.tap(find.text('Profile').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    expect(find.text('Welcome back'), findsOneWidget);
+
+    await tester.pumpWidget(MyMapApp(
+      key: const ValueKey('signed-out-launch'),
+      accountStorage: storage,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Welcome back'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const ValueKey('auth-email')))
+          .controller!
+          .text,
+      'ada@example.com',
+    );
   });
 }
